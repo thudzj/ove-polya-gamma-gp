@@ -16,9 +16,11 @@ from methods.protonet import ProtoNet
 from methods.matchingnet import MatchingNet
 from methods.relationnet import RelationNet
 from methods.maml import MAML
+from methods.mdkt import MDKT, PredictiveMDKT
 from io_utils import model_dict
 
 from methods.ove_polya_gamma_gp import kernel_ingredient
+from methods.mdkt import kernel_ingredient
 
 from tensorboardX import SummaryWriter
 
@@ -87,10 +89,10 @@ def get_config():
     # optimizer to use
     optimization = "Adam"
 
-    # num_draws for ove_polya_gamma_gp
+    # num_draws for PG sampling numbers
     num_draws = None
 
-    # num_steps for ove_polya_gamma_gp
+    # num_steps for PG iteration times
     num_steps = None
 
     sigma = None
@@ -164,7 +166,7 @@ def get_n_query(test_n_way, train_n_way):
 @ex.capture
 def get_base_loader(method, train_n_way, n_shot, train_aug):
     if method in ["baseline", "baseline++"]:
-        base_datamgr = SimpleDataManager(get_image_size(), batch_size=64) #### modify batch_size from 64 to 16
+        base_datamgr = SimpleDataManager(get_image_size(), batch_size=16)
     else:
         base_datamgr = SetDataManager(
             get_image_size(), n_query=get_n_query(), n_way=train_n_way, n_support=n_shot
@@ -176,7 +178,7 @@ def get_base_loader(method, train_n_way, n_shot, train_aug):
 @ex.capture
 def get_val_loader(method, test_n_way, n_shot, train_aug):
     if method in ["baseline", "baseline++"]:
-        val_datamgr = SimpleDataManager(get_image_size(), batch_size=16) #### modify batch_size from 16 to 4
+        val_datamgr = SimpleDataManager(get_image_size(), batch_size=64)
     else:
         val_datamgr = SetDataManager(
             get_image_size(), n_query=get_n_query(), n_way=test_n_way, n_support=n_shot
@@ -223,6 +225,24 @@ def get_model(
         return BaselineTrain(model_dict[model], num_classes)
     elif method == "baseline++":
         return BaselineTrain(model_dict[model], num_classes, loss_type="dist")
+    elif method == "mdkt":
+        model = MDKT(model_dict[model], **train_few_shot_params)
+        if num_draws is not None:
+            model.num_draws = num_draws   # gaussian sampling times
+        if num_steps is not None:
+            model.num_steps = num_steps   # PG updating times
+        if sigma is not None:
+            model.kernel.sigma = sigma
+        return model
+    elif method == "predictive_mdkt": #################
+        model = PredictiveMDKT(model_dict[model], **train_few_shot_params)
+        if num_draws is not None:
+            model.num_draws = num_draws   # gaussian sampling times
+        if num_steps is not None:
+            model.num_steps = num_steps   # PG updating times
+        if sigma is not None:
+            model.kernel.sigma = sigma
+        return model
     elif method == "ove_polya_gamma_gp":
         model = OVEPolyaGammaGP(model_dict[model], **train_few_shot_params)
         if num_draws is not None:
@@ -330,7 +350,7 @@ def _set_seed(seed, verbose=True):
         if verbose:
             print("[INFO] Setting SEED: None")
 
-
+###########################################
 def train(
     base_loader,
     val_loader,
@@ -352,14 +372,16 @@ def train(
         _run.log_scalar("train.loss", train_loss)
         writer.add_scalar("train.loss", train_loss, epoch)
 
-        # print("***********output_scale_raw is**********", self.output_scale_raw)
-
         model.eval()
         val_acc = model.test_loop(val_loader)
         _run.log_scalar("val.acc", val_acc)
         writer.add_scalar("val.acc", val_acc, epoch)
 
-        # for baseline and baseline++, we don't use validation here so we let acc = -1
+        # # for baseline and baseline++, we don't use validation here so we let acc = -1
+        # for i in model.named_parameters():
+        #     print(i)
+
+
         if val_acc > max_acc:
             print("--> Best model! save...")
             max_acc = val_acc
@@ -374,18 +396,8 @@ def train(
                 outfile,
             )
 
-            # ####
             # for i in model.named_parameters():
             #     print(i)
-
-            # print(model.named_parameters())
-
-
-            # print("kernel.output_scale_raw is", model.state_dict["kernel.output_scale_raw"])
-
-            # for j in optimizer.state_dict():
-            #     print(j)
-            ####
 
         if (epoch % save_freq == 0) or (epoch == stop_epoch - 1):
             outfile = os.path.join(checkpoint_dir, "last_model.pth")
@@ -421,8 +433,15 @@ def main(method, start_epoch, optimization, save_freq, tag, seed, _run):
     model = get_model()
     model = model.cuda()
 
-    if optimization == "Adam":
-        optimizer = torch.optim.Adam(model.parameters())
+    # if optimization == "SGD":
+    #     optimizer = torch.optim.SGD(model.parameters(), lr=0.01, momentum=0.9) 
+    # else:
+    #     raise ValueError("Unknown optimization, please define by yourself")
+
+    if optimization == "SGD":
+        optimizer = torch.optim.SGD(model.parameters(), lr=0.01, momentum=0.9) 
+    elif optimization == "Adam":
+        optimizer = torch.optim.Adam(model.parameters(), lr=0.0001, betas=(0.9, 0.999), eps=1e-08, weight_decay=1e-5)
     else:
         raise ValueError("Unknown optimization, please define by yourself")
 

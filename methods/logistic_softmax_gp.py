@@ -57,6 +57,9 @@ class LogisticSoftmaxGP(MetaTemplate):
 
         gibbs_state = self.gibbs_sample(model_state)
 
+        # print(self.log_marginal_likelihood(model_state, gibbs_state).shape)#torch.Size([20])
+        # print(X.size(0)) #85
+
         return -self.log_marginal_likelihood(model_state, gibbs_state).mean(0) / X.size(
             0
         )
@@ -75,9 +78,12 @@ class LogisticSoftmaxGP(MetaTemplate):
         gibbs_state = self.gibbs_sample(model_state)
 
         f_post = self.predict_posterior(model_state, gibbs_state, X_query)
+        # print(f_post) #MultivariateNormal(loc: torch.Size([20, 80, 5]), scale_tril: torch.Size([20, 80, 5, 5]
 
         f_samples = f_post.rsample((1000,))
+        # print(f_samples.shape) #torch.Size([1000, 20, 80, 5])
         f_samples = f_samples.reshape(-1, *Y_query.size())
+        # print(f_samples.shape) # torch.Size([20000, 80, 5])
 
         return F.log_softmax(F.logsigmoid(f_samples).mean(0), -1)
 
@@ -98,7 +104,7 @@ class LogisticSoftmaxGP(MetaTemplate):
         N = X.size(0)
         C = Y.size(-1)
 
-        mu = self.kernel.mean_function(X).view(C, N)
+        mu = self.kernel.mean_function(X).view(C, N) 
         K_block = self.kernel.cov_function(X)
         K_block = K_block + self.noise * torch.eye(
             K_block.size(-1), dtype=K_block.dtype, device=K_block.device
@@ -110,7 +116,7 @@ class LogisticSoftmaxGP(MetaTemplate):
         K = K.unsqueeze(0).expand(C, N, N)
         L = L.unsqueeze(0).expand(C, N, N)
 
-        Kinv_mu = torch.cholesky_solve(mu.unsqueeze(-1), L).squeeze(-1)
+        Kinv_mu = torch.cholesky_solve(mu.unsqueeze(-1), L).squeeze(-1) ######
 
         return LogisticSoftmaxModelState(
             N=N,
@@ -184,7 +190,7 @@ class LogisticSoftmaxGP(MetaTemplate):
 
         mu_tilde = Sigma.matmul(
             (model_state.Kinv_mu.unsqueeze(0) + kappa).unsqueeze(-1)
-        ).squeeze(-1)
+        ).squeeze(-1)   # not similar
 
         return MultivariateNormal(mu_tilde, scale_tril=psd_safe_cholesky(Sigma))
 
@@ -199,7 +205,9 @@ class LogisticSoftmaxGP(MetaTemplate):
         z = kappa / ω
 
         mu_star = model_state.kernel.batch_mean_function(X_star)
+        # print(mu_star.shape) #torch.Size ([80, 5])
         K_star = model_state.kernel.batch_cov_function(X_star, model_state.X)
+        # print(K_star.shape) #torch.Size ([80, 5, 125])
 
         mu_pred = mu_star.unsqueeze(0) + K_star.matmul(
             torch.cholesky_solve((z - model_state.mu.view(-1)).unsqueeze(-1), L_noisy)
@@ -208,11 +216,14 @@ class LogisticSoftmaxGP(MetaTemplate):
         ).permute([2, 0, 1])
 
         K_star_diag = model_state.kernel.batch_cov_function_diag(X_star)
+        # print(K_star_diag.shape) #torch.Size([80, 5, 5])
 
         Sigma_pred = K_star_diag.unsqueeze(0) - torch.cholesky_solve(
             K_star.transpose(-1, -2).unsqueeze(0), L_noisy.unsqueeze(1)
         ).transpose(-1, -2).matmul(K_star.transpose(-1, -2))
-
+        
+        # print(mu_pred, Sigma_pred)
+        # print(mu_pred.shape, Sigma_pred.shape, psd_safe_cholesky(Sigma_pred).shape) #torch.Size([20, 80, 5]) torch.Size([20, 80, 5, 5]) torch.Size([20, 80, 5, 5])
         return MultivariateNormal(mu_pred, scale_tril=psd_safe_cholesky(Sigma_pred))
 
     def log_marginal_likelihood(self, model_state, gibbs_state):

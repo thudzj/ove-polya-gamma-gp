@@ -83,7 +83,12 @@ def psd_safe_cholesky(A, upper=False, out=None, jitter=None):
         raise e
 
 
-class Kernel(nn.Module):
+######################################################################################
+# linear kernel: LinearKernel  (output_scale_raw + nn param.)
+# cosine lernel: L2LinearKernel  (output_scale_raw + nn param.)
+# RBF kernel: RBFKernel  (output_scale_raw, lengthscale_raw, nn.param.)
+# normalized RBF kernel: L2RBFKernel  (output_scale_raw, lengthscale_raw, nn.param.)
+class Kernel(nn.Module):   
     def __init__(self, num_classes, learn_params):
         self.num_classes = num_classes
         self.learn_params = learn_params
@@ -114,15 +119,15 @@ class Kernel(nn.Module):
         return block_matrix(self.cov_block_wrapper(x1, x2), self.num_classes)
 
     def batch_cov_function(self, x1, x2=None):
-        return batch_block_matrix(self.cov_block_wrapper(x1, x2), self.num_classes)
+        return batch_block_matrix(self.cov_block_wrapper(x1, x2), self.num_classes)# N*C*NC
 
     def batch_cov_function_diag(self, x1, x2=None):
         ret = self.cov_block_diag(x1, x2).unsqueeze(-1)
         ret = ret.expand(ret.size(0), self.num_classes)
-        return torch.diag_embed(ret)
+        return torch.diag_embed(ret) # N*C*C (only diag has value, others are 0)
 
 
-class LinearKernel(Kernel):
+class LinearKernel(Kernel):   # linear kernel  (output_scale_raw + nn param.)
     def __init__(self, *args, **kwargs):
         super(LinearKernel, self).__init__(*args, **kwargs)
         if self.learn_params:
@@ -137,10 +142,10 @@ class LinearKernel(Kernel):
         D = X.size(-1)
         return X / math.sqrt(D)
 
-    def cov_block(self, x1, x2=None):
+    def cov_block(self, x1, x2=None):  # Linear Kernel
         x1 = self.normalize(x1)
         x2 = self.normalize(x2)
-        return torch.exp(self.output_scale_raw) * (x1.mm(x2.t()))
+        return torch.exp(self.output_scale_raw) * (x1.mm(x2.t()))  # Linear Kernel Eq.48 
 
 
 class ConstantMeanLinearKernel(LinearKernel):
@@ -155,14 +160,13 @@ class ConstantMeanLinearKernel(LinearKernel):
         )
 
 
-class L2LinearKernel(LinearKernel):
+class L2LinearKernel(LinearKernel):  # cosine kernel
     def normalize(self, X):
-        return F.normalize(X)
-
+        return F.normalize(X)   # cosine kernel
 
 class ConstantMeanL2LinearKernel(ConstantMeanLinearKernel):
     def normalize(self, X):
-        return F.normalize(X)
+        return F.normalize(X)  # 2nd kernel: ConstantMean L2 LinearKernel
 
 
 class QuadraticKernel(Kernel):
@@ -188,10 +192,10 @@ class QuadraticKernel(Kernel):
 
 class L2QuadraticKernel(QuadraticKernel):
     def normalize(self, X):
-        return F.normalize(X)
+        return F.normalize(X)    # 3rd kernel: L2 Quadratic Kernel
 
 
-class RBFKernel(Kernel):
+class RBFKernel(Kernel):  # RBF Kernel: output_scale_raw, lengthscale_raw, nn.param.
     def __init__(self, *args, **kwargs):
         super(RBFKernel, self).__init__(*args, **kwargs)
         if self.learn_params:
@@ -221,10 +225,10 @@ class RBFKernel(Kernel):
         )
 
 
-class L2RBFKernel(RBFKernel):
+class L2RBFKernel(RBFKernel):  # normalized RBF Kernel
     def normalize(self, X):
-        return F.normalize(X)
-
+        return F.normalize(X)  # 4st kernel: L2 RBFKernel  
+#############################################################################
 
 OVEGibbsState = namedtuple("OVEGibbsState", ["ω", "f"])
 OVEModelState = namedtuple(
@@ -341,13 +345,17 @@ def gh_ove_log_prob(dist, A, quad):
         "jil,dnjil->dnji", A, torch.einsum("jik,dnlk->dnjil", A, Sigma)
     )
 
+
     log_prob_out = quad.forward(
         F.logsigmoid, torch.distributions.Normal(mu_out, Sigma_out)
     ).sum(-1)
 
+    
+    # print(mu.shape, Sigma.shape, mu_out.shape, Sigma_out.shape, log_prob_out.shape) #torch.Size([20, 80, 5]) torch.Size([20, 80, 5, 5]) torch.Size([20, 80, 5, 4]) torch.Size([20, 80, 5, 4]) torch.Size([20, 80, 5])
+
     return log_prob_out
 
-
+################################################################################
 class OVEPolyaGammaGP(MetaTemplate):
     def __init__(self, model_func, n_way, n_support, fast_inference=False):
         super(OVEPolyaGammaGP, self).__init__(model_func, n_way, n_support)
@@ -356,7 +364,7 @@ class OVEPolyaGammaGP(MetaTemplate):
         self.noise = 0.0
         self.ppg = pypolyagamma.PyPolyaGamma()
         self.num_steps = 1
-        self.num_draws = 1
+        self.num_draws = 20
         self.quad = GaussHermiteQuadrature1D()
 
         self.loss_fn = nn.CrossEntropyLoss()
@@ -369,7 +377,7 @@ class OVEPolyaGammaGP(MetaTemplate):
         shot = X.size(1)
 
         Y = torch.repeat_interleave(torch.eye(C, device=X.device), shot, 0)
-        X = X.reshape(-1, X.size(-1))
+        X = X.reshape(-1, X.size(-1)) #(C x shot) x D
 
         return X, Y
 
@@ -377,7 +385,7 @@ class OVEPolyaGammaGP(MetaTemplate):
         return self.parse_feature(x, is_feature)
 
     def merged_encode(self, x, is_feature=False):
-        z_support, z_query = self.parse_feature(x, is_feature=is_feature)
+        z_support, z_query = self.parse_feature(x, is_feature=is_feature) 
         return torch.cat([z_support, z_query], 1)
 
     def set_forward(self, X, is_feature=False, verbose=False):
@@ -385,7 +393,6 @@ class OVEPolyaGammaGP(MetaTemplate):
 
         X_support, Y_support = self.extract_dataset(X_support)
         X_query, Y_query = self.extract_dataset(X_query)
-
         model_state = self.fit(X_support, Y_support)
 
         gibbs_state = self.gibbs_sample(model_state)
@@ -404,11 +411,16 @@ class OVEPolyaGammaGP(MetaTemplate):
         K = self.kernel.cov_function(X)
         K = K + self.noise * torch.eye(K.size(-1), dtype=K.dtype, device=K.device)
 
+        # print(len(Y))  #105
+        # print(mu, K)
+
+        # print("mu and kernel size is:", mu.shape, K.shape) # mu and kernel size is: torch.Size([525]) torch.Size([525, 525]
+
         AK = A.mm(K)
         AKA_T = A.mm(K.mm(A.t()))
 
         L = psd_safe_cholesky(K)
-        Kinv_mu = torch.cholesky_solve(mu.unsqueeze(-1), L).squeeze(-1)
+        Kinv_mu = torch.cholesky_solve(mu.unsqueeze(-1), L).squeeze(-1) 
 
         batch_A = []
         for i in range(self.n_way):
@@ -423,10 +435,10 @@ class OVEPolyaGammaGP(MetaTemplate):
             mu=mu,
             K=K,
             L=L,
-            Kinv_mu=Kinv_mu,
+            Kinv_mu=Kinv_mu, #K^-1*mu
             A=A,
-            AK=AK,
-            AKA_T=AKA_T,
+            AK=AK, #A*K
+            AKA_T=AKA_T,#A*K*A(T)
             X=X,
             kernel=self.kernel,
             C=C,
@@ -463,10 +475,11 @@ class OVEPolyaGammaGP(MetaTemplate):
         ψ_prev = gibbs_state.f.mm(model_state.A.t())
         ω_new = self.sample_polya_gamma(ψ_prev)
         f_new = self.gaussian_conditional(model_state, ω_new).sample()
+        # print(f_new.shape)
 
         return OVEGibbsState(ω_new, f_new)
 
-    def gaussian_conditional(self, model_state, ω):
+    def gaussian_conditional(self, model_state, ω): # Eq.15
         kappa = 0.5 * torch.ones_like(ω)
         Ω_inv = torch.diag_embed(1.0 / ω)
 
@@ -479,9 +492,10 @@ class OVEPolyaGammaGP(MetaTemplate):
             (model_state.Kinv_mu.unsqueeze(0) + kappa.matmul(model_state.A)).unsqueeze(
                 -1
             )
-        ).squeeze(-1)
+        ).squeeze(-1)  
+        # print(mu_tilde.shape, psd_safe_cholesky(Sigma).shape)  #torch.Size([20, 525]) torch.Size([20, 525, 525]) torch.Size([20, 525])
 
-        return MultivariateNormal(mu_tilde, scale_tril=psd_safe_cholesky(Sigma))
+        return MultivariateNormal(mu_tilde, scale_tril=psd_safe_cholesky(Sigma))   
 
     def log_marginal_likelihood(self, model_state, ω):
         M = ω.shape[-1]
@@ -495,12 +509,17 @@ class OVEPolyaGammaGP(MetaTemplate):
         z_Sigma = model_state.AKA_T + Ω_inv
         p_z_marginal = MultivariateNormal(z_mu, z_Sigma)
 
+        # print("******mu and sigma shape is", z_mu.shape,z_Sigma.shape)  # torch.Size([420]) torch.Size([20, 420, 420])
+        # print(p_z_marginal.log_prob(z).shape,
+        # p_z_marginal.sample().shape
+        # )  #torch.Size([20]) torch.Size([20, 420])
+
         return (
             p_z_marginal.log_prob(z)
-            + 0.5 * M * np.log(2 * np.pi)
-            - 0.5 * torch.log(ω).sum(-1)
-            + 0.5 * torch.sum((kappa ** 2) / ω, -1)
-            - M * np.log(2.0)
+            # + 0.5 * M * np.log(2 * np.pi)
+            # - 0.5 * torch.log(ω).sum(-1)
+            # + 0.5 * torch.sum((kappa ** 2) / ω, -1)
+            # - M * np.log(2.0)
         )
 
     # use expression derived from partitioned Gaussian directly on f* and z.
@@ -548,8 +567,10 @@ class OVEPolyaGammaGP(MetaTemplate):
         L_noisy = psd_safe_cholesky(model_state.AKA_T + Ω_inv)
         z = kappa / omega
 
-        mu_star = model_state.kernel.batch_mean_function(X_star)
-        K_star = model_state.kernel.batch_cov_function(X_star, model_state.X)
+        mu_star = model_state.kernel.batch_mean_function(X_star) #torch.Size([80, 5])
+        K_star = model_state.kernel.batch_cov_function(X_star, model_state.X) #torch.Size([80, 5, 125])
+
+        # print("mu_star and K_star size is:", mu_star.shape, K_star.shape)
 
         mu_pred = mu_star.unsqueeze(0) + K_star.matmul(
             torch.cholesky_solve(
@@ -557,10 +578,14 @@ class OVEPolyaGammaGP(MetaTemplate):
             )
             .squeeze(-1)
             .matmul(model_state.A)
-            .t()
+            .t() # torch.Size([20, 80, 5])
         ).permute([2, 0, 1])
 
-        K_star_diag = model_state.kernel.batch_cov_function_diag(X_star)
+        K_star_diag = model_state.kernel.batch_cov_function_diag(X_star) #torch.Size([80, 5, 5])
+#         print("mu_pred and K_star_diag size is:", mu_pred.shape, K_star_diag.shape)
+#         mu_star and K_star size is: torch.Size([80, 5]) torch.Size([80, 5, 125])
+# mu_pred and K_star_diag size is: torch.Size([20, 80, 5]) torch.Size([80, 5, 5])
+
         return MultivariateNormal(
             mu_pred,
             scale_tril=psd_safe_cholesky(
@@ -599,14 +624,31 @@ class OVEPolyaGammaGP(MetaTemplate):
 
     def set_forward_loss(self, X):
         X, Y = self.extract_dataset(self.merged_encode(X))
+        # print("x and y size are", X.shape, Y.shape) #x and y size are torch.Size([105, 1600]) torch.Size([105, 5])
+        # print(X,Y)
         model_state = self.fit(X, Y)
 
         gibbs_state = self.gibbs_sample(model_state)
+
+        # print("X length is:", len(Y), model_state.mu.shape, model_state.K.shape, model_state.batch_A.shape)  # length is: 105 torch.Size([525]) torch.Size([525, 525]) torch.Size([5, 4, 5])
+
+        ###########
+        scores = gh_ove_log_prob(
+            self.predict_posterior(model_state, gibbs_state, X),
+            model_state.batch_A,
+            self.quad,
+        ).mean(0)
+        y_pred =scores.argmax(axis=1)
+        y_support = Y.argmax(axis=1)
+        accuracy = (torch.sum(y_pred==y_support) / float(len(y_support))) * 100.0
+        print("ACC is:", accuracy)
+        ###########
 
         return (
             -self.log_marginal_likelihood(model_state, gibbs_state.ω).mean(0)
             / X.size(0)
         )
+
 
 
 class PredictiveOVEPolyaGammaGP(OVEPolyaGammaGP):

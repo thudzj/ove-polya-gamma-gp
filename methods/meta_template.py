@@ -55,8 +55,13 @@ class MetaTemplate(nn.Module):
         return float(top1_correct), len(y_query), scores
 
     def train_loop(self, epoch, train_loader, optimizer):
+        ###################
+        # optimizer = torch.optim.Adam([{'params': self.model.parameters()}], lr=1e-3)
+
         avg_loss = 0
         pbar = tqdm.tqdm(train_loader)
+
+        # print("***********",train_loader[0])############
         i = 0
         for x, _ in pbar:
             i += 1
@@ -74,6 +79,79 @@ class MetaTemplate(nn.Module):
             )
 
         return avg_loss / i
+
+    #  def train_loop(self, epoch, train_loader, optimizer):
+    #     avg_loss = 0
+    #     pbar = tqdm.tqdm(train_loader)
+
+    #     i = 0
+    #     for x, _ in pbar:
+    #         torch.save()
+    #         i += 1
+    #         self.n_query = x.size(1) - self.n_support
+    #         if self.change_way:
+    #             self.n_way = x.size(0)
+    #         optimizer.zero_grad()
+    #         loss = self.set_forward_loss(x)
+    #         loss.backward()
+    #         optimizer.step()
+    #         avg_loss = avg_loss + loss.item()
+
+    #         pbar.set_description(
+    #             "Epoch {:d} | Loss {:f}".format(epoch, avg_loss / float(i + 1))
+    #         )
+
+    #     return avg_loss / i
+
+
+    # def train_loop(self, epoch, train_loader, optimizer):
+    #     avg_loss = 0
+    #     pbar = tqdm.tqdm(train_loader)
+
+    #     # print("***********",train_loader[0])############
+
+    #     for iter in range(100):
+
+    #         i = 0
+    #         for x, _ in pbar:
+    #             i += 1
+    #             self.n_query = x.size(1) - self.n_support
+    #             if self.change_way:
+    #                 self.n_way = x.size(0)
+    #             optimizer.zero_grad()
+    #             loss = self.set_forward_loss(x)
+    #             loss.backward()
+    #             optimizer.step()
+    #             avg_loss = avg_loss + loss.item()
+
+    #             print("*****Loss is:*****",loss)
+
+    #             if i == 1: 
+    #                 break
+
+    #             # pbar.set_description(
+    #             #     "Epoch {:d} | Loss {:f}".format(epoch, avg_loss / float(i + 1))
+    #             # )
+    #     return avg_loss / i
+
+    # def train_loop(self, epoch, train_loader, optimizer ):            
+    #     print_freq = 10
+
+    #     avg_loss=0
+    #     for i, (x,_) in enumerate(train_loader):
+    #         self.n_query = x.size(1) - self.n_support           
+    #         if self.change_way:
+    #             self.n_way  = x.size(0)
+    #         optimizer.zero_grad()
+    #         loss = self.set_forward_loss( x )
+    #         loss.backward()
+    #         optimizer.step()
+    #         avg_loss = avg_loss+loss.item()
+
+    #         if i % print_freq==0:
+    #             #print(optimizer.state_dict()['param_groups'][0]['lr'])
+    #             print('Epoch {:d} | Batch {:d}/{:d} | Loss {:f}'.format(epoch, i, len(train_loader), avg_loss/float(i+1)))
+
 
     def test_loop(
         self,
@@ -105,6 +183,7 @@ class MetaTemplate(nn.Module):
                 x_flat = x.view(-1, *x.size()[2:])
                 x_flat = feature_extractor(x_flat.cuda())
                 x = x_flat.view(*x.size()[:2], -1)
+            # print(x.shape) #torch.Size([5, 17, 3, 84, 84])
             scores = self.set_forward(x)
             logits_all.append(scores.cpu().detach().numpy())
             y_query = np.repeat(range(self.n_way), self.n_query)
