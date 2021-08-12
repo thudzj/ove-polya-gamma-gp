@@ -78,6 +78,10 @@ def parse_args(script):
             action="store_true",
             help="continue from baseline, neglected if resume is true",
         )  # never used in the paper
+        parser.add_argument(
+            "--bpti",
+            action="store_true"
+        )  # never used in the paper
     elif script == "save_features":
         parser.add_argument(
             "--split", default="novel", help="base/val/novel"

@@ -100,6 +100,10 @@ def get_config():
     # tag (for logging purposes)
     tag = "default"
 
+    bpti = 0
+
+    fix_nn = 0
+
 
 @ex.capture
 def get_base_file(dataset):
@@ -218,6 +222,8 @@ def get_model(
     num_draws,
     num_steps,
     sigma,
+    bpti,
+    fix_nn,
 ):
     train_few_shot_params = dict(n_way=train_n_way, n_support=n_shot)
 
@@ -227,12 +233,33 @@ def get_model(
         return BaselineTrain(model_dict[model], num_classes, loss_type="dist")
     elif method == "mdkt":
         model = MDKT(model_dict[model], **train_few_shot_params)
+        if fix_nn:
+            ckpt = torch.load('/data/zhijie/deep-kernel-transfer/save/checkpoints/CUB/Conv4_DKT_aug_5way_1shot/599.tar')
+
+            state = {}
+            for k, v in ckpt['state'].items():
+                if 'feature_extractor' in k and 'bn_out' not in k:
+                    state[k.replace('feature_extractor.', '')] = v
+                    # print(k.replace('feature_extractor.', ''), v.shape)
+
+            # for k, v in model.feature.state_dict().items():
+                # print(k, v.shape)
+
+            model.feature.load_state_dict(state)
+
+            # print(len(list(state.keys())), len(list(model.feature.state_dict().keys())))
+
+        # exit()
+
+
         if num_draws is not None:
             model.num_draws = num_draws   # gaussian sampling times
         if num_steps is not None:
             model.num_steps = num_steps   # PG updating times
         if sigma is not None:
             model.kernel.sigma = sigma
+        if bpti is not None:
+            model.bpti = bpti
         return model
     elif method == "predictive_mdkt": #################
         model = PredictiveMDKT(model_dict[model], **train_few_shot_params)
@@ -242,6 +269,8 @@ def get_model(
             model.num_steps = num_steps   # PG updating times
         if sigma is not None:
             model.kernel.sigma = sigma
+        if bpti is not None:
+            model.bpti = bpti
         return model
     elif method == "ove_polya_gamma_gp":
         model = OVEPolyaGammaGP(model_dict[model], **train_few_shot_params)
@@ -417,7 +446,7 @@ def train(
 
 
 @ex.automain
-def main(method, start_epoch, optimization, save_freq, tag, seed, _run):
+def main(method, start_epoch, optimization, save_freq, tag, seed, _run, fix_nn):
     print("using config: ", _run.config)
     print("save_dir: ", get_save_dir())
 
@@ -434,14 +463,27 @@ def main(method, start_epoch, optimization, save_freq, tag, seed, _run):
     model = model.cuda()
 
     # if optimization == "SGD":
-    #     optimizer = torch.optim.SGD(model.parameters(), lr=0.01, momentum=0.9) 
+    #     optimizer = torch.optim.SGD(model.parameters(), lr=0.01, momentum=0.9)
     # else:
     #     raise ValueError("Unknown optimization, please define by yourself")
 
     if optimization == "SGD":
-        optimizer = torch.optim.SGD(model.parameters(), lr=0.01, momentum=0.9) 
+        optimizer = torch.optim.SGD(model.parameters(), lr=0.01, momentum=0.9)
     elif optimization == "Adam":
-        optimizer = torch.optim.Adam(model.parameters(), lr=0.0001, betas=(0.9, 0.999), eps=1e-08, weight_decay=1e-5)
+        nn_params, others = [], []
+        for n, p in model.named_parameters():
+            if 'trunk' in n:
+                nn_params.append(p)
+            else:
+                others.append(p)
+            print(n, p.shape)
+        if fix_nn:
+            print("Train only the kernel hyper-params")
+            optimizer = torch.optim.Adam([{'params': others, 'lr': 1e-4}])
+        else:
+            optimizer = torch.optim.Adam([{'params': others, 'lr': 1e-4},
+                                          {'params': nn_params, 'lr': 1e-3}])
+        # optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
     else:
         raise ValueError("Unknown optimization, please define by yourself")
 

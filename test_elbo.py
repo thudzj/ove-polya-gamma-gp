@@ -68,13 +68,13 @@ C = Y.shape[-1]
 K = X.mm(X.t())+torch.eye(N, dtype=X.dtype, device=X.device)
 
 
-# mu = torch.zeros(N, C, dtype=K.dtype, device=K.device) 
+# mu = torch.zeros(N, C, dtype=K.dtype, device=K.device)
 # mu_n_c = torch.ones(N, C, dtype=K.dtype, device=K.device)  # N*C
 # Sigma_n_c = (K+torch.eye(N, N, dtype=K.dtype, device=K.device)).repeat(C,1).reshape(C, N, N) # C*N*N
 # f_n_c= torch.sqrt(torch.diag(K)).view(-1,1).repeat(1,C) # N*C
 # alpha_n = torch.ones(N, dtype=K.dtype, device=K.device)
 # gnc = torch.tensor(psi(alpha_n.data.cpu().numpy()),device=Y.device).reshape(-1,1).expand(N,C)
-# gamma_n_c = torch.exp(gnc-mu_n_c/2)/2/C/torch.cosh(f_n_c/2)    
+# gamma_n_c = torch.exp(gnc-mu_n_c/2)/2/C/torch.cosh(f_n_c/2)
 # w_n_c = (gamma_n_c + Y)/2/f_n_c*torch.tanh(f_n_c/2)
 # L = torch.slogdet(K)[1]
 # K_inv = torch.inverse(K)
@@ -94,13 +94,13 @@ K = X.mm(X.t())+torch.eye(N, dtype=X.dtype, device=X.device)
 
 
 
-mu = torch.zeros(N, C, dtype=K.dtype, device=K.device) 
+mu = torch.zeros(N, C, dtype=K.dtype, device=K.device)
 mu_n_c = torch.ones(N, C, dtype=K.dtype, device=K.device)  # N*C
 Sigma_n_c = (K+torch.eye(N, N, dtype=K.dtype, device=K.device)).repeat(C,1).reshape(C, N, N) # C*N*N
 f_n_c= torch.sqrt(torch.diag(K)).view(-1,1).repeat(1,C) # N*C
 alpha_n = torch.ones(N, dtype=K.dtype, device=K.device)
 gnc = torch.tensor(psi(alpha_n.data.cpu().numpy()),device=Y.device).reshape(-1,1).expand(N,C)
-gamma_n_c = torch.exp(gnc-mu_n_c/2)/2/C/torch.cosh(f_n_c/2)    
+gamma_n_c = torch.exp(gnc-mu_n_c/2)/2/C/torch.cosh(f_n_c/2)
 w_n_c = (gamma_n_c + Y)/2/f_n_c*torch.tanh(f_n_c/2)
 L = torch.slogdet(K)[1]
 K_inv = torch.inverse(K)
@@ -140,7 +140,7 @@ for i in range(2):
     +torch.sum(alpha_n-torch.log(torch.tensor([C], dtype=K.dtype, device=K.device))+torch.log(torch.tensor(gamma(alpha_n.data.cpu().numpy()),device=K.device))+(1-alpha_n)*torch.digamma(alpha_n))\
     -torch.sum(gamma_n_c*(torch.log(gamma_n_c)-1)-gamma_n_c*((torch.digamma(alpha_n)-torch.log(torch.tensor([C], dtype=K.dtype, device=K.device))).reshape(-1,1)))-torch.sum(alpha_n/C)\
     -torch.sum(-f_n_c**2/2*w_n_c+(gamma_n_c+Y)*torch.log(torch.cosh(f_n_c/2)))
-    for c in range(C):    
+    for c in range(C):
         ELBO-=0.5*(L-torch.slogdet(Sigma_n_c[c])[1]- N + torch.trace(torch.mm(K_inv,Sigma_n_c[c]))+ torch.mul(torch.mv(K_inv, mu[:,c]-mu_n_c[:,c]).t(),mu[:,c]-mu_n_c[:,c]).sum())
     # print("****:", -ELBO)
 
