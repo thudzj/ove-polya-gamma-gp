@@ -27,6 +27,12 @@ from tensorboardX import SummaryWriter
 from sacred import Experiment
 from sacred.observers import FileStorageObserver
 
+import matplotlib
+matplotlib.use('agg')
+import matplotlib.pyplot as plt
+plt.rcParams.update({'figure.max_open_warning': 0})
+# plt.rcParams['font.family'] = 'Times New Roman'
+plt.rcParams.update({'font.size': 20})
 
 EXPERIMENT_NAME = "train"
 RUN_DIR = "runs"
@@ -395,11 +401,40 @@ def train(
 ):
     print("Total epochs: {:d}".format(stop_epoch))
 
+    a, output_scale, lengthscale, noise = [], [], [], []
     for epoch in range(start_epoch, stop_epoch):
         model.train()
-        train_loss = model.train_loop(epoch, base_loader, optimizer)
+        train_loss, a_, output_scale_, lengthscale_, noise_ = model.train_loop(epoch, base_loader, optimizer)
+        a.append(a_); output_scale.append(output_scale_); lengthscale.append(lengthscale_); noise.append(noise_);
+
+        fig = plt.figure(figsize=(10, 10))
+        ax = fig.add_subplot(221)
+        ax.plot(range(1, epoch + 2), a)
+        ax.set_xlabel('Epoch')
+        ax.set_ylabel('A', fontsize=16)
+
+        ax = fig.add_subplot(222)
+        ax.plot(range(1, epoch + 2), output_scale)
+        ax.set_xlabel('Epoch')
+        ax.set_ylabel('output_scale', fontsize=16)
+
+        ax = fig.add_subplot(223)
+        ax.plot(range(1, epoch + 2), lengthscale)
+        ax.set_xlabel('Epoch')
+        ax.set_ylabel('lengthscale', fontsize=16)
+
+        ax = fig.add_subplot(224)
+        ax.plot(range(1, epoch + 2), noise)
+        ax.set_xlabel('Epoch')
+        ax.set_ylabel('noise', fontsize=16)
+
+        fig.tight_layout()
+        fig.savefig('hypers.png', format='png', dpi=1000, bbox_inches='tight')
+
+
         _run.log_scalar("train.loss", train_loss)
         writer.add_scalar("train.loss", train_loss, epoch)
+
 
         model.eval()
         val_acc = model.test_loop(val_loader)
@@ -468,7 +503,7 @@ def main(method, start_epoch, optimization, save_freq, tag, seed, _run, fix_nn):
     #     raise ValueError("Unknown optimization, please define by yourself")
 
     if optimization == "SGD":
-        optimizer = torch.optim.SGD(model.parameters(), lr=0.01, momentum=0.9)
+        optimizer = torch.optim.SGD(model.parameters(), lr=0.001, momentum=0.9)
     elif optimization == "Adam":
         nn_params, others = [], []
         for n, p in model.named_parameters():
@@ -479,9 +514,9 @@ def main(method, start_epoch, optimization, save_freq, tag, seed, _run, fix_nn):
             print(n, p.shape)
         if fix_nn:
             print("Train only the kernel hyper-params")
-            optimizer = torch.optim.Adam([{'params': others, 'lr': 1e-4}])
+            optimizer = torch.optim.Adam([{'params': others, 'lr': 1e-3}])
         else:
-            optimizer = torch.optim.Adam([{'params': others, 'lr': 1e-4},
+            optimizer = torch.optim.Adam([{'params': others, 'lr': 1e-3},
                                           {'params': nn_params, 'lr': 1e-3}])
         # optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
     else:

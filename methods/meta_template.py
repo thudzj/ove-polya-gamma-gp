@@ -4,6 +4,7 @@ from torch.autograd import Variable
 import numpy as np
 from abc import abstractmethod
 import tqdm
+import torch.nn.functional as F
 
 
 class MetaTemplate(nn.Module):
@@ -78,7 +79,15 @@ class MetaTemplate(nn.Module):
                 "Epoch {:d} | Loss {:f}".format(epoch, avg_loss / float(i + 1))
             )
 
-        return avg_loss / i
+        print("a: {:.2f}  out scale: {:.5f}  length scale: {:.2f}  noise: {:.5f}".format(
+                self.a.item(),
+                F.softplus(self.kernel.output_scale_raw).item(),
+                torch.exp(self.kernel.lengthscale_raw).item() if hasattr(self.kernel, 'lengthscale_raw') else float('nan'),
+                F.softplus(self.noise).item()
+            ))
+
+
+        return avg_loss / i, self.a.item(), F.softplus(self.kernel.output_scale_raw).item(), torch.exp(self.kernel.lengthscale_raw).item() if hasattr(self.kernel, 'lengthscale_raw') else float('nan'), F.softplus(self.noise).item()
 
     #  def train_loop(self, epoch, train_loader, optimizer):
     #     avg_loss = 0
@@ -126,7 +135,7 @@ class MetaTemplate(nn.Module):
 
     #             print("*****Loss is:*****",loss)
 
-    #             if i == 1: 
+    #             if i == 1:
     #                 break
 
     #             # pbar.set_description(
@@ -134,12 +143,12 @@ class MetaTemplate(nn.Module):
     #             # )
     #     return avg_loss / i
 
-    # def train_loop(self, epoch, train_loader, optimizer ):            
+    # def train_loop(self, epoch, train_loader, optimizer ):
     #     print_freq = 10
 
     #     avg_loss=0
     #     for i, (x,_) in enumerate(train_loader):
-    #         self.n_query = x.size(1) - self.n_support           
+    #         self.n_query = x.size(1) - self.n_support
     #         if self.change_way:
     #             self.n_way  = x.size(0)
     #         optimizer.zero_grad()
@@ -172,6 +181,7 @@ class MetaTemplate(nn.Module):
             pbar = tqdm.tqdm(test_loader)
         else:
             pbar = test_loader
+        mu_s, sigma_s, mu_pre, sigma_pre = [], [], [], []
         for x, _ in pbar:
             self.n_query = x.size(1) - self.n_support
             if self.change_way:
@@ -184,7 +194,9 @@ class MetaTemplate(nn.Module):
                 x_flat = feature_extractor(x_flat.cuda())
                 x = x_flat.view(*x.size()[:2], -1)
             # print(x.shape) #torch.Size([5, 17, 3, 84, 84])
-            scores = self.set_forward(x)
+            with torch.no_grad():
+                scores, mu_s_, sigma_s_, mu_pre_, sigma_pre_ = self.set_forward(x)
+            mu_s.append(mu_s_); sigma_s.append(sigma_s_); mu_pre.append(mu_pre_); sigma_pre.append(sigma_pre_);
             logits_all.append(scores.cpu().detach().numpy())
             y_query = np.repeat(range(self.n_way), self.n_query)
             targets_all.append(y_query)
@@ -206,6 +218,10 @@ class MetaTemplate(nn.Module):
             "%d Test Acc = %4.2f%% +- %4.2f%%"
             % (iter_num, acc_mean, 1.96 * acc_std / np.sqrt(iter_num))
         )
+        print(torch.stack([torch.stack(mu_s, 0).mean(0),
+                           torch.stack(sigma_s, 0).mean(0),
+                           torch.stack(mu_pre, 0).mean(0),
+                           torch.stack(sigma_pre, 0).mean(0),]).data.cpu().numpy())
 
         if return_std:
             return acc_mean, acc_std

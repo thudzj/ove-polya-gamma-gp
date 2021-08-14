@@ -110,7 +110,7 @@ class LinearKernel(Kernel):   # linear kernel  (output_scale_raw + nn param.)
             self.register_parameter("output_scale_raw", nn.Parameter(torch.tensor([math.log(math.e**1-1)])))
             self.register_parameter("mean_value", nn.Parameter(torch.zeros(1)))###################
         else:
-            self.register_buffer("output_scale_raw", torch.tensor([0.]))
+            self.register_buffer("output_scale_raw", torch.tensor([math.log(math.e**1-1)]))
             self.register_parameter("mean_value", torch.zeros(1))
 
     def mean_function(self, X):
@@ -158,9 +158,9 @@ class QuadraticKernel(Kernel):
     def __init__(self, *args, **kwargs):
         super(QuadraticKernel, self).__init__(*args, **kwargs)
         if self.learn_params:
-            self.register_parameter("output_scale_raw", nn.Parameter(torch.zeros(1)))
+            self.register_parameter("output_scale_raw", nn.Parameter(torch.Tensor([math.log(math.e**1-1)])))
         else:
-            self.register_buffer("output_scale_raw", torch.zeros(1))
+            self.register_buffer("output_scale_raw", torch.Tensor([math.log(math.e**1-1)]))
 
     def mean_function(self, X):
         # return torch.zeros(X.size(0) * self.num_classes, dtype=X.dtype, device=X.device)
@@ -185,10 +185,10 @@ class RBFKernel(Kernel):  # RBF Kernel: output_scale_raw, lengthscale_raw, nn.pa
     def __init__(self, *args, **kwargs):
         super(RBFKernel, self).__init__(*args, **kwargs)
         if self.learn_params:
-            self.register_parameter("output_scale_raw", nn.Parameter(torch.zeros(1)))
+            self.register_parameter("output_scale_raw", nn.Parameter(torch.Tensor([math.log(math.e**1-1)])))
             self.register_parameter("lengthscale_raw", nn.Parameter(torch.zeros(1)))
         else:
-            self.register_buffer("output_scale_raw", torch.zeros(1))
+            self.register_buffer("output_scale_raw", torch.Tensor([math.log(math.e**1-1)]))
             self.register_buffer("lengthscale_raw", torch.zeros(1))
 
     def mean_function(self, X):
@@ -206,9 +206,9 @@ class RBFKernel(Kernel):  # RBF Kernel: output_scale_raw, lengthscale_raw, nn.pa
             + (x2 ** 2).sum(-1).view(1, -1)
             - 2 * x1.mm(x2.t())
         )
-        print()
+        # print()
         return F.softplus(self.output_scale_raw) * torch.exp(
-            -0.5 * dists / torch.exp(2.0 * self.lengthscale_raw)
+            -0.5 * dists / torch.exp(self.lengthscale_raw)
         )
 
 class L2RBFKernel(RBFKernel):  # normalized RBF Kernel
@@ -261,8 +261,8 @@ class MDKT(MetaTemplate):
         super(MDKT, self).__init__(model_func, n_way, n_support)
         self.n_way = n_way
         self.kernel = load_kernel(n_way)
-        # self.register_parameter("noise", nn.Parameter(torch.Tensor([math.log(math.e**0.001 - 1)])))
-        self.register_buffer("noise", torch.Tensor([math.log(math.e**0.001 - 1)]))
+        self.register_parameter("noise", nn.Parameter(torch.Tensor([math.log(math.e**0.001 - 1)])))
+        # self.register_buffer("noise", torch.Tensor([math.log(math.e**0.001 - 1)]))
         # self.noise = nn.Parameter(torch.Tensor([math.log(math.e**0.001 - 1)]), require_grad=False)
         # self.register_parameter("a", nn.Parameter(torch.Tensor([0.])))
         self.register_buffer("a", torch.Tensor([0.]))
@@ -307,7 +307,8 @@ class MDKT(MetaTemplate):
             prior = MultivariateNormal(self.a.expand(K.shape[0]), K)
             KL_all = 0
             for c in range(C):
-                approx_posterior = MultivariateNormal(mu_n_c[:,c], Sigma_n_c[c])
+                approx_posterior = MultivariateNormal(mu_n_c[:,c],
+                    Sigma_n_c[c] + 1e-4 * torch.eye(Sigma_n_c[c].shape[0], device=Sigma_n_c[c].device))
                 KL_all += torch.distributions.kl.kl_divergence(approx_posterior, prior)
             return KL_all
         else:
@@ -339,7 +340,7 @@ class MDKT(MetaTemplate):
     def fit(self, X, Y):
         K = self.kernel.cov_block_wrapper(X)
         if self.noise is not None:
-            K = K + F.softplus(self.noise) * torch.eye(X.size(0), dtype=X.dtype, device=X.device)
+            K = K + F.softplus(self.noise).add(0.00003) * torch.eye(X.size(0), dtype=X.dtype, device=X.device)
         return MDKTpgModelState(
             N=Y.shape[0],
             C=self.n_way,
@@ -350,9 +351,11 @@ class MDKT(MetaTemplate):
             kernel=self.kernel,
         )
 
-    def pg_update(self, model_state):
+    def pg_update(self, model_state, num_steps=None):
+        if num_steps is None:
+            num_steps = self.num_steps
         pg_state = self.initial_pg_state(model_state)
-        for _ in range(self.num_steps):
+        for _ in range(num_steps):
             # print("\n inner", self.multi_class_logl(model_state.Y, pg_state.mu_n_c).item(), (pg_state.mu_n_c.argmax(axis=1)==model_state.Y.argmax(axis=1)).float().mean(), self.ELBO(model_state, pg_state).item())
 
             pg_state = self.next_pg_state(model_state, pg_state)
@@ -407,10 +410,10 @@ class MDKT(MetaTemplate):
         Sigma_pre = k_qq + k_qs @ k_inv_ss @ (sigma_s @ k_inv_ss - torch.eye(len(z_train), device=z_query.device)) @ k_sq
         sigma_pre = torch.diagonal(Sigma_pre, offset=0, dim1=1, dim2=2).T.sqrt() # 80 * 5
 
-        # print(torch.stack([mu_pre[0], sigma_pre[0], (k_qs @ k_inv_ss @ sigma_s @ k_inv_ss @ k_sq)[:, 0, 0]]).mean(-1).data.cpu().numpy(), k_qq[0,0].item(), -(k_qs @ k_inv_ss @ k_sq)[0, 0].item(), self.a.item(), F.softplus(self.kernel.output_scale_raw).item())
+        # print(torch.stack([mu_s[0], sigma_s[:, 0, 0], mu_pre[0], sigma_pre[0]]).data.cpu().numpy())
         return mu_pre, sigma_pre  #80*5,  80*5
 
-    def set_forward(self, X, is_feature=False, verbose=False, return_all_samples=False):
+    def set_forward(self, X, is_feature=False, verbose=False, return_all_samples=False, mean_prob=False):
         X_support, X_query = self.encode(X, is_feature=is_feature)
 
         X_support, Y_support = self.extract_dataset(X_support)
@@ -425,8 +428,10 @@ class MDKT(MetaTemplate):
 
         if return_all_samples:
             return F.logsigmoid(f_samples).log_softmax(-1)
+        elif mean_prob:
+            return F.logsigmoid(f_samples).softmax(-1).mean(0).log()
         else:
-            return F.logsigmoid(f_samples).softmax(-1).mean(0).log() # F.logsigmoid(mu_pre).log_softmax(-1) #
+            return F.logsigmoid(mu_pre).log_softmax(-1), pg_state.mu_n_c[0], torch.diagonal(pg_state.Sigma_n_c, offset=0, dim1=1, dim2=2).T.sqrt()[0], mu_pre[0], sigma_pre[0] #  #
 
     def set_forward_loss(self, X): #x:tensor, y:tensor
         X, Y = self.extract_dataset(self.merged_encode(X))
@@ -447,4 +452,4 @@ class PredictiveMDKT(MDKT):
         y_query = y_query.cuda()
         # scores = self.set_forward(x, return_all_samples=True)
         # return F.nll_loss(scores.flatten(0, 1), y_query.repeat(scores.shape[0]))
-        return F.nll_loss(self.set_forward(x), y_query)
+        return F.nll_loss(self.set_forward(x, mean_prob=True), y_query)
