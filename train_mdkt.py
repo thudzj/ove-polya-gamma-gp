@@ -1,3 +1,8 @@
+'''
+CUDA_VISIBLE_DEVICES=1 python train_mdkt.py with method=mdkt dataset=CUB train_aug=True kernel.name=L2LinearKernel num_draws=20 num_steps=1 n_shot=5 bpti=0 fix_nn=1
+CUDA_VISIBLE_DEVICES=1 python test_mdkt.py with job_id=22 method=mdkt kernel.name=L2LinearKernel num_draws=20 num_steps=1 n_shot=5 test_n_way=5
+'''
+
 import numpy as np
 import torch
 import random
@@ -108,7 +113,13 @@ def get_config():
 
     bpti = 0
 
+    direct_marginal = 0
+
     fix_nn = 0
+
+    new_elbo = 0
+
+    ove_marginal = 0
 
 
 @ex.capture
@@ -229,7 +240,10 @@ def get_model(
     num_steps,
     sigma,
     bpti,
+    direct_marginal,
     fix_nn,
+    new_elbo,
+    ove_marginal
 ):
     train_few_shot_params = dict(n_way=train_n_way, n_support=n_shot)
 
@@ -266,6 +280,9 @@ def get_model(
             model.kernel.sigma = sigma
         if bpti is not None:
             model.bpti = bpti
+        model.direct_marginal = direct_marginal
+        model.new_elbo = new_elbo
+        model.ove_marginal = ove_marginal
         return model
     elif method == "predictive_mdkt": #################
         model = PredictiveMDKT(model_dict[model], **train_few_shot_params)

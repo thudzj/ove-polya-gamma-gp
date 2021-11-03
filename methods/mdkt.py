@@ -30,6 +30,26 @@ import random
 from configs import kernel_type
 ############
 
+from methods.ove_polya_gamma_gp import psd_safe_cholesky
+
+try:
+	from torch import kron
+except ImportError:
+	def kron(a, b):
+		siz1 = torch.Size(torch.tensor(a.shape[-2:]) * torch.tensor(b.shape[-2:]))
+		res = a.unsqueeze(-1).unsqueeze(-3) * b.unsqueeze(-2).unsqueeze(-4)
+		siz0 = res.shape[:-4]
+		return res.reshape(siz0 + siz1)
+
+try:
+	from torch import block_diag
+except ImportError:
+	def block_diag(*m):
+		m = torch.cat([m1.unsqueeze(-3) for m1 in m], -3)
+		eye = torch.eye(m.shape[-3], device=m.device)[:, None, :, None]
+		return (m.unsqueeze(-2) * eye).reshape(torch.Size(torch.tensor(m.shape[-2:]) * m.shape[-3]))
+
+
 kernel_ingredient = Ingredient("kernel")
 
 
@@ -270,6 +290,9 @@ class MDKT(MetaTemplate):
         self.num_draws = 50
         self.fast_inference = fast_inference
         self.bpti = 0
+        self.direct_marginal = 0
+        self.new_elbo = 0
+        self.ove_marginal = 0
 
     ############################################
 
@@ -301,16 +324,48 @@ class MDKT(MetaTemplate):
         Y = model_state.Y
         mu_n_c = pg_state.mu_n_c
         Sigma_n_c = pg_state.Sigma_n_c
-        if not self.bpti: # todo
+        if self.new_elbo:
+            loss = 0
+            for c in range(C):
+                dist = MultivariateNormal(torch.zeros(K.shape[0], device=K.device),
+                    scale_tril=psd_safe_cholesky(K + (1./pg_state.w_n_c[:, c].detach()).diag()))
+                sample = (Y[:, c] - pg_state.gamma_n_c[:, c].detach()) / 2. / pg_state.w_n_c[:, c].detach()
+                loss -= dist.log_prob(sample)
+            return loss
+        elif self.ove_marginal:
+            ω = pg_state.w_n_c.T.view(-1).clamp(min=1e-6)
+            kappa = 0.5 * (Y - pg_state.gamma_n_c).T.reshape(-1)  # draws x CN
+            z = kappa / ω
+            Ω_inv = torch.diag(1.0 / ω)
+
+            z_mu = torch.zeros(z.shape[0], device=K.device)
+            z_Sigma = kron(torch.eye(C, device=K.device), K) + Ω_inv
+
+            p_z_marginal = MultivariateNormal(z_mu, scale_tril=psd_safe_cholesky(z_Sigma))
+            return -(
+                p_z_marginal.log_prob(z)
+                + 0.5 * z.shape[0] * np.log(2 * np.pi)
+                - 0.5 * torch.log(ω).sum(-1)
+                + 0.5 * torch.sum((kappa ** 2) / ω, -1)
+                - z.shape[0] * np.log(2.0)
+            )
+
+
+        elif not self.bpti: # todo
             mu_n_c = mu_n_c.detach()
             Sigma_n_c = Sigma_n_c.detach()
-            prior = MultivariateNormal(self.a.expand(K.shape[0]), K)
-            KL_all = 0
-            for c in range(C):
-                approx_posterior = MultivariateNormal(mu_n_c[:,c],
-                    Sigma_n_c[c] + 1e-4 * torch.eye(Sigma_n_c[c].shape[0], device=Sigma_n_c[c].device))
-                KL_all += torch.distributions.kl.kl_divergence(approx_posterior, prior)
-            return KL_all
+            # prior = MultivariateNormal(self.a.expand(K.shape[0]), scale_tril=psd_safe_cholesky(K))
+            # KL_all = 0
+            # for c in range(C):
+            #     approx_posterior = MultivariateNormal(mu_n_c[:,c],
+            #         scale_tril=psd_safe_cholesky(Sigma_n_c[c]))
+            #     KL_all += torch.distributions.kl.kl_divergence(approx_posterior, prior)
+            # return KL_all
+            prior = MultivariateNormal(torch.zeros(C*K.shape[0], device=K.device),
+                scale_tril=kron(torch.eye(C, device=K.device), psd_safe_cholesky(K).contiguous()))
+            approx_posterior = MultivariateNormal(mu_n_c.T.view(-1),
+                scale_tril=block_diag(*psd_safe_cholesky(Sigma_n_c)))
+            return torch.distributions.kl.kl_divergence(approx_posterior, prior)
         else:
             #todo add the a
             prior = MultivariateNormal(torch.zeros(K.shape[0], device=K.device), K)
@@ -340,7 +395,7 @@ class MDKT(MetaTemplate):
     def fit(self, X, Y):
         K = self.kernel.cov_block_wrapper(X)
         if self.noise is not None:
-            K = K + F.softplus(self.noise).add(0.00003) * torch.eye(X.size(0), dtype=X.dtype, device=X.device)
+            K = K + F.softplus(self.noise).add(0.00001) * torch.eye(X.size(0), dtype=X.dtype, device=X.device)
         return MDKTpgModelState(
             N=Y.shape[0],
             C=self.n_way,
@@ -397,6 +452,7 @@ class MDKT(MetaTemplate):
         z_train = model_state.X
         k_qq = model_state.kernel.cov_block_wrapper(z_query)
         k_qs = model_state.kernel.cov_block_wrapper(z_query, z_train)
+
         k_inv_ss = model_state.K_inv
 
         k_sq = k_qs.T
@@ -410,11 +466,23 @@ class MDKT(MetaTemplate):
         Sigma_pre = k_qq + k_qs @ k_inv_ss @ (sigma_s @ k_inv_ss - torch.eye(len(z_train), device=z_query.device)) @ k_sq
         sigma_pre = torch.diagonal(Sigma_pre, offset=0, dim1=1, dim2=2).T.sqrt() # 80 * 5
 
+
         # print(torch.stack([mu_s[0], sigma_s[:, 0, 0], mu_pre[0], sigma_pre[0]]).data.cpu().numpy())
         return mu_pre, sigma_pre  #80*5,  80*5
 
     def set_forward(self, X, is_feature=False, verbose=False, return_all_samples=False, mean_prob=False):
         X_support, X_query = self.encode(X, is_feature=is_feature)
+
+
+        # print("<----------------ss------------------>")
+        #
+        # # print(k_qs.sum(-1).data.cpu().numpy())
+        # # print(z_query.shape, z_train.shape, k_qs.shape)
+        # print(X[:, self.n_support:].flatten(0, 1).flatten(1).norm(dim=1).data.cpu().numpy(), X_query.flatten(0, 1).norm(dim=1).data.cpu().numpy())
+        # # print(k_inv_ss.data.cpu().numpy())
+        # # print(mu_s.data.cpu().numpy())
+        # # print(mu_pre.data.cpu().numpy())
+        # print(">----------------ee------------------<")
 
         X_support, Y_support = self.extract_dataset(X_support)
         X_query, Y_query = self.extract_dataset(X_query)
@@ -437,14 +505,25 @@ class MDKT(MetaTemplate):
         X, Y = self.extract_dataset(self.merged_encode(X))
 
         model_state = self.fit(X, Y)
-        pg_state = self.pg_update(model_state)
-        #####
-        # max prediction
-        # y_pred = pg_state.mu_n_c.argmax(axis=1) # 1*85   array([0, 1, 2, 3, 4])
-        # y_support = Y.argmax(axis=1)
-        # accuracy = (torch.sum(y_pred==y_support) / float(len(y_support))) * 100.0
-        # print(accuracy.item(), F.softplus(self.noise).item(), F.softplus(self.kernel.output_scale_raw).item())
-        return self.ELBO(model_state, pg_state)
+        if self.direct_marginal:
+            prior = MultivariateNormal(torch.zeros(model_state.K.shape[0], device=model_state.K.device), model_state.K)
+            f_samples = prior.rsample((self.num_draws*model_state.C,)).view(
+                self.num_draws, model_state.C, model_state.K.shape[0])
+
+            neg_logp = F.nll_loss(F.logsigmoid(f_samples).log_softmax(-1),
+                                  Y.argmax(-1).view(1, -1).repeat(self.num_draws, 1))
+            p_all = (-neg_logp).exp().prod(-1)
+            marginal_logp = p_all.mean().log()
+            return -marginal_logp
+        else:
+            pg_state = self.pg_update(model_state)
+            #####
+            # max prediction
+            # y_pred = pg_state.mu_n_c.argmax(axis=1) # 1*85   array([0, 1, 2, 3, 4])
+            # y_support = Y.argmax(axis=1)
+            # accuracy = (torch.sum(y_pred==y_support) / float(len(y_support))) * 100.0
+            # print(accuracy.item(), F.softplus(self.noise).item(), F.softplus(self.kernel.output_scale_raw).item())
+            return self.ELBO(model_state, pg_state)
 
 class PredictiveMDKT(MDKT):
     def set_forward_loss(self, x):
